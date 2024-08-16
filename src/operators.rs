@@ -71,25 +71,127 @@ pub fn masked_softmax(y: &mut Tensor<f32>) {
 }
 
 pub fn rms_norm(y: &mut Tensor<f32>, x: &Tensor<f32>, w: &Tensor<f32>, epsilon: f32) {
-    todo!("实现 rms_norm，计算前做一些必要的检查会帮助你后续调试")
+    assert!(y.size() == x.size());
+
+    // 至少有两个维度
+    let ndim = x.shape().len();
+    assert!(ndim >= 2);
+
+    // w 是个一维向量
+    let w_dim = w.shape().len();
+    assert!(w_dim == 1);
+
+    let row = x.shape()[ndim - 2];
+    let col = x.shape()[ndim - 1];
+
+    // 确保 x 与 w 维度相同
+    assert!(w.size() == col);
+
+    let _y = unsafe { y.data_mut() };
+    let _x = x.data();
+    let _w = w.data();
+
+    for i in 0..row {
+        let start = i * col;
+        let end = start + col;
+
+        let mut sum_squares = 0.0;
+
+        for j in start..end {
+            sum_squares += _x[j].powi(2);
+        }
+
+        let var = (sum_squares / col as f32 + epsilon).sqrt();
+
+        for k in 0..col {
+            let index = start + k;
+            _y[index] = _x[index] * _w[k] / var;
+        }
+    }
+}
+
+// sigmoid
+pub fn sigmoid(x: f32) -> f32 {
+    1.0 / (1.0 + (-x).exp())
 }
 
 // y = sigmoid(x) * x * y
 // hint: this is an element-wise operation
 pub fn silu(y: &mut Tensor<f32>, x: &Tensor<f32>) {
-    // let len = y.size();
-    // assert!(len == x.size());
+    let len = y.size();
+    assert!(len == x.size());
 
-    // let _y = unsafe { y.data_mut() };
-    // let _x = x.data();
+    let _x = x.data();
+    let _y = unsafe { y.data_mut() };
 
-    todo!("实现 silu，这里给了一些前期准备工作的提示，你可以参考")
+    for i in 0..len {
+        _y[i] = _x[i] * sigmoid(_x[i]) * _y[i];
+    }
 }
 
 // C = beta * C + alpha * A @ B^T
 // hint: You don't need to do an explicit transpose of B
 pub fn matmul_transb(c: &mut Tensor<f32>, beta: f32, a: &Tensor<f32>, b: &Tensor<f32>, alpha: f32) {
-    todo!("实现 matmul_transb，计算前做一些必要的检查会帮助你后续调试");
+    let a_dim = a.shape().len();
+    let a_row = a.shape()[a_dim - 2];
+    let a_col = a.shape()[a_dim - 1];
+
+    let b_dim = b.shape().len();
+    let b_row = b.shape()[b_dim - 2];
+    let b_col = b.shape()[b_dim - 1];
+
+    let len = c.size();
+
+    let _c = unsafe { c.data_mut() };
+    let _a = a.data();
+    let _b = b.data();
+
+    // 暂时只考虑二维
+    assert!(a_col == b_col);
+
+    // for i in 0..a_row {
+    //     for j in 0..b_row {
+    //         let mut sum = 0.0;
+    //         for k in 0..a_col {
+    //             sum += _a[i * a_col + k] * _b[j * b_col + k];
+    //         }
+    //         _c[i * a_row + j] = alpha * sum + beta * _c[i * a_row + j];
+    //     }
+    // }
+
+    let mut n_ab: Vec<f32> = Vec::new();
+
+    for i in 0..a_row {
+        let start = i * &a_col;
+        for j in 0..b_row {
+            let sta = j * &b_col;
+            let n_m: Vec<_> = _a[start..(start + &a_col)]
+                .iter()
+                .zip(_b[sta..(sta + &a_col)].iter())
+                .map(|(a, b)| a * b)
+                .collect();
+            let n_sum = n_m.iter().sum::<f32>() * alpha;
+            n_ab.push(n_sum);
+        }
+    }
+
+    for i in 0..len {
+        _c[i] = _c[i] * beta + n_ab[i];
+    }
+}
+
+// 矩阵 a + b
+pub fn add(y: &mut Tensor<f32>, x: &Tensor<f32>) {
+    assert!(x.shape() == y.shape());
+
+    let len = y.size();
+
+    let _x = x.data();
+    let _y = unsafe { y.data_mut() };
+
+    for i in 0..len {
+        _y[i] = _x[i] + _y[i];
+    }
 }
 
 // Dot product of two tensors (treated as vectors)
