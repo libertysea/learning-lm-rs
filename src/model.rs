@@ -3,25 +3,25 @@ use std::vec;
 
 use crate::config::LlamaConfigJson;
 use crate::kvcache::KVCache;
-use crate::operators as OP;
+use crate::operators::{self as OP, masked_softmax, random_sample};
 use crate::params::LLamaParams;
 use crate::tensor::Tensor;
 use safetensors::SafeTensors;
 use std::path::Path;
 pub struct Llama<T> {
-    vocab: usize,           // vocab size
-    n_layers: usize,        // number of layers
-    n_q_h: usize,           // number of heads for q
-    n_kv_h: usize,          // number of heads for k and v
-    d: usize,               // dimension of hidden states
+    vocab: usize,           // vocab size       词表大小
+    n_layers: usize,        // number of layers     隐藏层数
+    n_q_h: usize,           // number of heads for q        Self-Attention的Q头数
+    n_kv_h: usize,          // number of heads for k and v      Self-Attention的K和V头数
+    d: usize,               // dimension of hidden states       隐藏层大小，即各层输出的最后一维
     dqkv: usize,            // length of a single q, k, or v vector
-    di: usize,              // dimension of intermediate states
+    di: usize,              // dimension of intermediate states     Feed-Forward神经网络的中间层大小
     eps: f32,               // epsilon for RMS normalization
-    rope_theta: f32,        // rope theta for rope initialization
-    max_seq_len: usize,     // maximum sequence length
+    rope_theta: f32,        // rope theta for rope initialization       RoPE的theta参数
+    max_seq_len: usize,     // maximum sequence length      最大序列长度
     params: LLamaParams<T>, // trained weights of this model
-    bos_token_id: u32,      // start token id
-    eos_token_id: u32,      // end token id
+    bos_token_id: u32,      // start token id       起始符token id
+    eos_token_id: u32,      // end token id     结束符token id
 }
 
 impl Llama<f32> {
@@ -74,6 +74,9 @@ impl Llama<f32> {
         OP::gather(&mut residual, input, &self.params.embedding_table);
 
         for layer in 0..self.n_layers {
+            // dqkv = d / n_q_h
+            // q [seq, n_q_h * dqkv]
+            // k,v [seq, n_kv_h * dqkv]
             OP::rms_norm(
                 &mut hidden_states,
                 &residual,
@@ -101,10 +104,43 @@ impl Llama<f32> {
             let full_k = &mut cache.k_cache(layer, 0); // (total_seq, n_kv_h * dqkv)
             let full_v = &mut cache.v_cache(layer, 0); // (total_seq, n_kv_h * dqkv)
 
-            todo!("self_attention(...)");
-            todo!("down_proj matmul and add residual");
+            // self_attention
+            self_attention(
+                &mut hidden_states,
+                &mut att_scores,
+                q,
+                full_k,
+                full_v,
+                self.n_kv_h,
+                n_groups,
+                seq_len,
+                total_seq_len,
+                self.dqkv,
+            );
 
-            todo!("mlp(...)");
+            // x = x @ O_weight.T
+            // residual = x + residual
+            OP::matmul_transb(
+                &mut residual,
+                1f32,
+                &hidden_states,
+                &self.params.wo[layer],
+                1.0f32,
+            );
+
+            // mlp
+            mlp(
+                &mut residual,
+                &mut hidden_states,
+                &mut gate_buf,
+                &mut up_buf,
+                &self.params.w_up[layer],
+                &self.params.w_down[layer],
+                &self.params.w_gate[layer],
+                &self.params.rms_ffn_w[layer],
+                self.eps,
+            );
+
         }
 
         // No matter what seq_len, the output is always a 1D vector of length vocab,
@@ -112,7 +148,7 @@ impl Llama<f32> {
         let mut logits = Tensor::<f32>::default(&vec![1, self.vocab]);
         let mut hidden_states = hidden_states.slice((seq_len - 1) * self.d, &vec![1, self.d]);
         let residual = residual.slice((seq_len - 1) * self.d, &vec![self.d]);
-
+        
         OP::rms_norm(
             &mut hidden_states,
             &residual,
@@ -121,7 +157,7 @@ impl Llama<f32> {
         );
 
         OP::matmul_transb(&mut logits, 0., &hidden_states, &self.params.lm_head, 1.0);
-
+        
         logits
     }
 
@@ -134,8 +170,21 @@ impl Llama<f32> {
         temperature: f32,
     ) -> Vec<u32> {
         let mut result = Vec::<u32>::new();
-
-        todo!("实现文本生成");
+        let mut cache = self.new_cache();
+        let mut token: Vec<u32> = Vec::from(token_ids);
+        if token[0] != self.bos_token_id {
+            token.insert(0, self.bos_token_id);
+        }
+        let mut input = Tensor::<u32>::new(token, &vec![1, token_ids.len()]);
+        loop {
+            let output =
+                random_sample(&self.forward(&input, &mut cache), top_p, top_k, temperature);
+            result.push(output);
+            if result.len() >= max_len || output == self.eos_token_id {
+                break;
+            }
+            input = Tensor::<u32>::new(Vec::from([output]), &vec![1, 1]);
+        }
 
         result
     }
@@ -153,7 +202,44 @@ fn self_attention(
     total_seq_len: usize,
     dqkv: usize,
 ) {
-    todo!("Implement self_attention");
+    let _a = unsafe { att_scores.data_mut() };
+    let _q = q.data();
+    let _k = k.data();
+    let _v = v.data();
+    let sqrt = (dqkv as f32).sqrt();
+
+    // score = Q @ K.T / sqrt(dim)
+    for q in 0..n_kv_h * n_groups {
+        for seq in 0..seq_len {
+            for t_seq in 0..total_seq_len {
+                let mut sum = 0.0;
+                for d in 0..dqkv {
+                    sum += _q[seq * n_kv_h * n_groups * dqkv + q * dqkv + d] 
+                        * _k[t_seq * n_kv_h * dqkv + q / n_groups * dqkv + d];
+                }
+                _a[q * seq_len * total_seq_len + seq * total_seq_len + t_seq] = sum / sqrt;
+            }
+        }
+    }
+
+    // attn = softmax(score)
+    masked_softmax(att_scores);
+
+    // x = attn @ V
+    let _a = att_scores.data();
+    let _h = unsafe { hidden_states.data_mut() };
+    for q in 0..n_kv_h * n_groups {
+        for seq in 0..seq_len {
+            for d in 0..dqkv {
+                let mut sum = 0.0; 
+                for t_seq in 0..total_seq_len {
+                    sum += _a[q * seq_len * total_seq_len + seq * total_seq_len + t_seq] 
+                        * _v[d + q / n_groups * dqkv + t_seq * n_kv_h * dqkv]; 
+                }
+                _h[seq * n_kv_h * n_groups * dqkv + q * dqkv + d] = sum;
+            }
+        }
+    }
 }
 
 fn mlp(

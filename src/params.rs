@@ -22,6 +22,7 @@ pub struct LLamaParams<T> {
 
 impl LLamaParams<f32> {
     pub fn from_safetensors(safetensor: &SafeTensors, config: &LlamaConfigJson) -> Self {
+        
         let get_tensor = |name: &str| -> Tensor<f32> {
             let tensor = safetensor.tensor(name).unwrap();
             let data = tensor.data();

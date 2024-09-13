@@ -74,15 +74,15 @@ pub fn rms_norm(y: &mut Tensor<f32>, x: &Tensor<f32>, w: &Tensor<f32>, epsilon: 
     assert!(y.size() == x.size());
 
     // 至少有两个维度
-    let ndim = x.shape().len();
+    let ndim = y.shape().len();
     assert!(ndim >= 2);
 
     // w 是个一维向量
     let w_dim = w.shape().len();
     assert!(w_dim == 1);
 
-    let row = x.shape()[ndim - 2];
-    let col = x.shape()[ndim - 1];
+    let row = y.shape()[ndim - 2];
+    let col = y.shape()[ndim - 1];
 
     // 确保 x 与 w 维度相同
     assert!(w.size() == col);
