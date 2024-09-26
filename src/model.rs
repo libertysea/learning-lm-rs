@@ -140,7 +140,6 @@ impl Llama<f32> {
                 &self.params.rms_ffn_w[layer],
                 self.eps,
             );
-
         }
 
         // No matter what seq_len, the output is always a 1D vector of length vocab,
@@ -148,7 +147,7 @@ impl Llama<f32> {
         let mut logits = Tensor::<f32>::default(&vec![1, self.vocab]);
         let mut hidden_states = hidden_states.slice((seq_len - 1) * self.d, &vec![1, self.d]);
         let residual = residual.slice((seq_len - 1) * self.d, &vec![self.d]);
-        
+
         OP::rms_norm(
             &mut hidden_states,
             &residual,
@@ -157,20 +156,50 @@ impl Llama<f32> {
         );
 
         OP::matmul_transb(&mut logits, 0., &hidden_states, &self.params.lm_head, 1.0);
-        
+
         logits
     }
 
-    pub fn generate(
+    // generate
+    // pub fn generate(
+    //     &self,
+    //     token_ids: &[u32],
+    //     max_len: usize,
+    //     top_p: f32,
+    //     top_k: u32,
+    //     temperature: f32,
+    // ) -> Vec<u32> {
+    //     let mut result = Vec::<u32>::new();
+    //     let mut cache = self.new_cache();
+    //     let mut token: Vec<u32> = Vec::from(token_ids);
+    //     if token[0] != self.bos_token_id {
+    //         token.insert(0, self.bos_token_id);
+    //     }
+    //     let mut input = Tensor::<u32>::new(token, &vec![1, token_ids.len()]);
+    //     loop {
+    //         let output =
+    //             random_sample(&self.forward(&input, &mut cache), top_p, top_k, temperature);
+    //         result.push(output);
+    //         if result.len() >= max_len || output == self.eos_token_id {
+    //             break;
+    //         }
+    //         input = Tensor::<u32>::new(Vec::from([output]), &vec![1, 1]);
+    //     }
+
+    //     result
+    // }
+
+    pub fn generate_chat(
         &self,
         token_ids: &[u32],
         max_len: usize,
         top_p: f32,
         top_k: u32,
         temperature: f32,
-    ) -> Vec<u32> {
+        cache: Option<KVCache<f32>>,
+    ) -> (Vec<u32>, KVCache<f32>) {
         let mut result = Vec::<u32>::new();
-        let mut cache = self.new_cache();
+        let mut cache = cache.unwrap_or_else(|| self.new_cache());
         let mut token: Vec<u32> = Vec::from(token_ids);
         if token[0] != self.bos_token_id {
             token.insert(0, self.bos_token_id);
@@ -186,7 +215,7 @@ impl Llama<f32> {
             input = Tensor::<u32>::new(Vec::from([output]), &vec![1, 1]);
         }
 
-        result
+        (result, cache)
     }
 }
 
@@ -214,7 +243,7 @@ fn self_attention(
             for t_seq in 0..total_seq_len {
                 let mut sum = 0.0;
                 for d in 0..dqkv {
-                    sum += _q[seq * n_kv_h * n_groups * dqkv + q * dqkv + d] 
+                    sum += _q[seq * n_kv_h * n_groups * dqkv + q * dqkv + d]
                         * _k[t_seq * n_kv_h * dqkv + q / n_groups * dqkv + d];
                 }
                 _a[q * seq_len * total_seq_len + seq * total_seq_len + t_seq] = sum / sqrt;
@@ -231,10 +260,10 @@ fn self_attention(
     for q in 0..n_kv_h * n_groups {
         for seq in 0..seq_len {
             for d in 0..dqkv {
-                let mut sum = 0.0; 
+                let mut sum = 0.0;
                 for t_seq in 0..total_seq_len {
-                    sum += _a[q * seq_len * total_seq_len + seq * total_seq_len + t_seq] 
-                        * _v[d + q / n_groups * dqkv + t_seq * n_kv_h * dqkv]; 
+                    sum += _a[q * seq_len * total_seq_len + seq * total_seq_len + t_seq]
+                        * _v[d + q / n_groups * dqkv + t_seq * n_kv_h * dqkv];
                 }
                 _h[seq * n_kv_h * n_groups * dqkv + q * dqkv + d] = sum;
             }
