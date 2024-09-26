@@ -2,3 +2,4 @@
 Cargo.lock
 .vscode
 /models/chat
+.idea
