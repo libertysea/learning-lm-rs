@@ -59,13 +59,12 @@ fn main() {
     change_id = 0;
 
     loop {
-        // 先打印前缀
         println!();
         println!("Please input: ");
-        // 注意这里使用std::io::stdout().flush()来确保前缀立即被打印出来
+
         io::stdout().flush().expect("无法刷新stdout");
 
-        // 读取一行输入
+        // 读取输入
         let mut input = String::new();
         if reader.read_line(&mut input).is_err() {
             eprintln!("读取输入时出错");
@@ -93,7 +92,6 @@ fn main() {
 
         // 检查是否输入 'change chat-id'
         if input.starts_with("change") {
-            // 尝试获取编号（跳过 "change" 和可能的空格）
             let id_part = input.split_whitespace().skip(1).next();
             if let Ok(c_id) = usize::from_str(id_part.unwrap()) {
                 change_id = c_id;
@@ -172,8 +170,8 @@ fn main() {
             his_message_new = format!("{} \n {}", message, message_input.clone(),);
         }
 
-        // let his_message_new = format!("{} \n {}", message, message_input.clone(),);
 
+        // 更新 chat
         chat_tmp.set_message(message_new);
         chat_tmp.set_his_message(his_message_new);
         chat_tmp.set_cache(new_cache);
